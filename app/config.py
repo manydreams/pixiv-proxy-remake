@@ -3,7 +3,6 @@ from flask import Flask
 def config(app: Flask):
     app.config.update(
         # application configuration
-        SQLITE_DB = './sqlite.db',
         PIXIV_REFRESH_TOKEN = '',
         CACHE_EXPIRA_TIME = 259200,     # 3 days
         
