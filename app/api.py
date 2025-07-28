@@ -12,12 +12,12 @@ bp = Blueprint('api', __name__, url_prefix='/')
 cache = Cache(max_size=1024)
 
 @bp.route('/<image_id>', methods=['GET'])
-def pixiv_image_proxy(image_id: str):
+async def pixiv_image_proxy(image_id: str):
     current_app.logger.info(f'[Image_Get] {image_id}')
-    return get_image(image_id)
+    return await get_image(image_id)
     # return make_response('Not Implemented', 404)
 
-def get_image(image_id: str) -> Response:
+async def get_image(image_id: str) -> Response:
     """get pixiv image (preferred cache use)
 
     Args:
@@ -35,19 +35,19 @@ def get_image(image_id: str) -> Response:
         pid, img_idx = get_pid(image_id)
 
         # get access token
-        access_token = get_pixiv_token()
+        access_token = await get_pixiv_token()
         if not access_token:
             current_app.logger.warning(
                 f'[Token_Get] can\'t get access_token, try again later')
             return make_response('Token Error', 401)
         # get image url
-        img_url_list = get_img_url(pid, access_token)
+        img_url_list = await get_img_url(pid, access_token)
         if img_url_list[0] == 'error':
             current_app.logger.warning(
                 f'[Illust_Get] can\'t get image url, try again later')
             return make_response(img_url_list[2], img_url_list[1])
         # get image data
-        img_data = download_image(img_url_list, img_idx)
+        img_data = await download_image(img_url_list, img_idx)
         if type(img_data) == list:
             current_app.logger.warning(
                 f'[Image_Get] can\'t get image data, try again later')
@@ -69,7 +69,7 @@ def get_image(image_id: str) -> Response:
     }
     return make_response(img_data, 200, headers)
         
-def download_image(imgs_url: list[str], img_idx: int) -> bytes | list:
+async def download_image(imgs_url: list[str], img_idx: int) -> bytes | list:
     """download image data from url
 
     Args:
@@ -89,9 +89,7 @@ def download_image(imgs_url: list[str], img_idx: int) -> bytes | list:
         return [404, 'Image index out of range']
     try:
         current_app.logger.info(f'[Image_Get] {img_url}')
-        res = httpx.get(
-            url = img_url,
-            headers = {
+        headers = {
                 # 'host': 'i.pximg.net',
                 # 'app-os': 'ios',
                 # 'app-os-version': '14.6',
@@ -99,9 +97,13 @@ def download_image(imgs_url: list[str], img_idx: int) -> bytes | list:
                 # 'Authorization': f"Bearer {access_token}",
                 # 'accept-language': 'zh-cn',
                 'Referer': 'https://www.pixiv.net/'
-            },
-            proxy=current_app.config.get('PROXY')
-        )
+            }
+        async with httpx.AsyncClient(headers=headers,
+            proxy=current_app.config.get('PROXY')) as cli:
+            
+            res = await cli.get(
+                url = img_url
+            )
         if res.status_code == 200:
             return res.content
         else:
@@ -136,7 +138,7 @@ def get_pid(image_id: str) -> tuple[int,int]:
         return (-1,404)  # 输入参数错误
     return (pid,image_id)
 
-def get_img_url(pid: int, access_token: str) -> list:
+async def get_img_url(pid: int, access_token: str) -> list:
     """get image url from pixiv api
 
     Args:
@@ -159,12 +161,13 @@ def get_img_url(pid: int, access_token: str) -> list:
         # 'accept-language': 'zh-cn'
     }
     params = {'illust_id': pid}
-    res = httpx.get(
-        url=pixiv_api,
-        headers=headers,
-        params=params,
-        proxy=current_app.config.get('PROXY')
-    )
+    async with httpx.AsyncClient(headers=headers, 
+        proxy=current_app.config.get('PROXY')) as cli:
+        
+        res: Response = await cli.get(
+            url=pixiv_api,
+            params=params,
+        )
 
     match res.status_code:
         case 200:
@@ -208,7 +211,7 @@ def get_img_url(pid: int, access_token: str) -> list:
             f'[Illust_Get] get image failed, KeyError: {e}')
         return
 
-def get_pixiv_token(count: int = 0) -> str | None:
+async def get_pixiv_token(count: int = 0) -> str | None:
     """get pixiv access_token
 
     Returns:
@@ -231,18 +234,20 @@ def get_pixiv_token(count: int = 0) -> str | None:
     if access_token['expireAt'] - 500 < datetime.now().timestamp():
         
         # refresh token
-        res: httpx.Response = httpx.post(
-            url="https://oauth.secure.pixiv.net/auth/token",
-            data={
-                "client_id": "MOBrBDS8blbauoSck0ZfDbtuzpyT",
-                "client_secret": "lsACyCD94FhDUtGTXi3QzcFE2uU1hqtDaKeqrdwj",
-                "grant_type": "refresh_token",
-                "include_policy": "true",
-                "refresh_token": refresh_token,
-            },
+        async with httpx.AsyncClient(
             headers={"User-Agent": "PixivAndroidApp/5.0.234 (Android 11; Pixel 5)"}, 
-            proxy=current_app.config.get('PROXY')
-        )
+            proxy=current_app.config.get('PROXY')) as cli:
+        
+            res: Response = await cli.post(
+                url="https://oauth.secure.pixiv.net/auth/token",
+                data={
+                    "client_id": "MOBrBDS8blbauoSck0ZfDbtuzpyT",
+                    "client_secret": "lsACyCD94FhDUtGTXi3QzcFE2uU1hqtDaKeqrdwj",
+                    "grant_type": "refresh_token",
+                    "include_policy": "true",
+                    "refresh_token": refresh_token,
+                },
+            )
         
         # check refresh result faile
         if res.status_code != 200:
@@ -250,7 +255,7 @@ def get_pixiv_token(count: int = 0) -> str | None:
                 f'[Token_Refresh] get token failed')
             current_app.logger.warning(
                 f'[Token_Refresh] HTTP Code: {res.status_code}, Try again...')
-            return get_pixiv_token(count+1)
+            return await get_pixiv_token(count+1)
         
         data = res.json()
         current_app.logger.info(f'[Token_Refresh] {data}')
